@@ -1,0 +1,26 @@
+export type JobStatus = "queued" | "running" | "completed" | "failed";
+
+export type WorkflowType = "summarize_text" | "extract_structured_data" | "classify_message";
+
+export interface JobListItem {
+  id: string;
+  workflow_type: WorkflowType;
+  status: JobStatus;
+  retry_count: number;
+  max_retries: number;
+  created_at: string;
+  completed_at: string | null;
+  latency_ms: number | null;
+}
+
+export interface MetricsSummary {
+  total_jobs: number;
+  queued_jobs: number;
+  running_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  success_rate: number;
+  average_latency_ms: number;
+  total_retries: number;
+}
+

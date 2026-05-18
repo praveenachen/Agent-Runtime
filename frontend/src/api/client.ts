@@ -1,0 +1,30 @@
+import type { JobListItem, MetricsSummary, WorkflowType } from "../types";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+export async function fetchJobs(): Promise<JobListItem[]> {
+  const response = await fetch(`${API_BASE_URL}/jobs`);
+  if (!response.ok) throw new Error("Unable to load jobs");
+  return response.json();
+}
+
+export async function fetchMetricsSummary(): Promise<MetricsSummary> {
+  const response = await fetch(`${API_BASE_URL}/metrics-summary`);
+  if (!response.ok) throw new Error("Unable to load metrics");
+  return response.json();
+}
+
+export async function submitJob(workflowType: WorkflowType, text: string): Promise<void> {
+  const input_payload =
+    workflowType === "classify_message" ? { message: text } : { text };
+  const response = await fetch(`${API_BASE_URL}/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflow_type: workflowType, input_payload }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Unable to submit job");
+  }
+}
+

@@ -4,8 +4,11 @@ from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.logging import get_logger
 from app.models.job import Job, JobLog, JobStatus
 from app.schemas.job import JobCreate
+
+logger = get_logger(__name__)
 
 
 class JobService:
@@ -49,6 +52,10 @@ class JobService:
             if job.started_at:
                 job.latency_ms = int((job.completed_at - job.started_at).total_seconds() * 1000)
         self.add_log(job.id, "info", message, {"status": status.value})
+        logger.info(
+            message,
+            extra={"job_id": job.id, "workflow_type": job.workflow_type, "status": status.value},
+        )
 
     def mark_for_retry(self, job: Job, error: Exception) -> None:
         job.retry_count += 1

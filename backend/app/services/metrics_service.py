@@ -31,3 +31,30 @@ class MetricsService:
     def _count_status(self, status: JobStatus) -> int:
         return self.db.scalar(select(func.count()).select_from(Job).where(Job.status == status)) or 0
 
+    def prometheus_text(self) -> str:
+        summary = self.summary()
+        avg_latency_seconds = float(summary["average_latency_ms"]) / 1000
+        lines = [
+            "# HELP agent_jobs_total Total workflow jobs created.",
+            "# TYPE agent_jobs_total counter",
+            f"agent_jobs_total {summary['total_jobs']}",
+            "# HELP agent_jobs_completed_total Total workflow jobs completed.",
+            "# TYPE agent_jobs_completed_total counter",
+            f"agent_jobs_completed_total {summary['completed_jobs']}",
+            "# HELP agent_jobs_failed_total Total workflow jobs failed.",
+            "# TYPE agent_jobs_failed_total counter",
+            f"agent_jobs_failed_total {summary['failed_jobs']}",
+            "# HELP agent_job_retries_total Total workflow retries attempted.",
+            "# TYPE agent_job_retries_total counter",
+            f"agent_job_retries_total {summary['total_retries']}",
+            "# HELP agent_job_latency_seconds Average completed workflow latency in seconds.",
+            "# TYPE agent_job_latency_seconds gauge",
+            f"agent_job_latency_seconds {avg_latency_seconds}",
+            "# HELP agent_jobs_by_status Current jobs by status.",
+            "# TYPE agent_jobs_by_status gauge",
+            f"agent_jobs_by_status{{status=\"queued\"}} {summary['queued_jobs']}",
+            f"agent_jobs_by_status{{status=\"running\"}} {summary['running_jobs']}",
+            f"agent_jobs_by_status{{status=\"completed\"}} {summary['completed_jobs']}",
+            f"agent_jobs_by_status{{status=\"failed\"}} {summary['failed_jobs']}",
+        ]
+        return "\n".join(lines) + "\n"

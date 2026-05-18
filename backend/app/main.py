@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.api.routes_jobs import router as jobs_router
 from app.db.init_db import init_db
 
 configure_logging()
@@ -18,6 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(jobs_router)
+
 
 @app.on_event("startup")
 def on_startup() -> None:
@@ -27,4 +30,3 @@ def on_startup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
-

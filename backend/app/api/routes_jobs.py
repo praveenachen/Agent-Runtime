@@ -30,3 +30,14 @@ def list_jobs(db: Session = Depends(get_db)) -> list[JobListItem]:
 def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     job = JobService(db).get_job(job_id)
     return JobRead.model_validate(job)
+
+
+@router.post("/{job_id}/retry", response_model=JobRead, status_code=202)
+def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
+    service = JobService(db)
+    job = service.reset_failed_job_for_retry(job_id)
+    rq_job_id = QueueService().enqueue_job(job.id)
+    service.add_log(job.id, "info", "Manual retry dispatched to Redis queue", {"rq_job_id": rq_job_id})
+    db.commit()
+    db.refresh(job)
+    return JobRead.model_validate(job)

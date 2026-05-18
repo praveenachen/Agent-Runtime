@@ -50,3 +50,29 @@ class JobService:
                 job.latency_ms = int((job.completed_at - job.started_at).total_seconds() * 1000)
         self.add_log(job.id, "info", message, {"status": status.value})
 
+    def mark_for_retry(self, job: Job, error: Exception) -> None:
+        job.retry_count += 1
+        job.status = JobStatus.queued
+        job.error_message = str(error)
+        self.add_log(
+            job.id,
+            "warning",
+            "Workflow failed; retry queued",
+            {"retry_count": job.retry_count, "max_retries": job.max_retries, "error": str(error)},
+        )
+
+    def reset_failed_job_for_retry(self, job_id: str) -> Job:
+        job = self.get_job(job_id)
+        if job.status != JobStatus.failed:
+            raise HTTPException(status_code=409, detail="Only failed jobs can be retried")
+        job.status = JobStatus.queued
+        job.retry_count = 0
+        job.output_payload = None
+        job.error_message = None
+        job.started_at = None
+        job.completed_at = None
+        job.latency_ms = None
+        self.add_log(job.id, "info", "Manual retry queued", {"status": JobStatus.queued.value})
+        self.db.commit()
+        self.db.refresh(job)
+        return job

@@ -13,6 +13,22 @@ export interface JobListItem {
   latency_ms: number | null;
 }
 
+export interface JobLog {
+  id: number;
+  level: string;
+  message: string;
+  created_at: string;
+  context: Record<string, unknown> | null;
+}
+
+export interface JobRead extends JobListItem {
+  input_payload: Record<string, unknown>;
+  output_payload: Record<string, unknown> | null;
+  error_message: string | null;
+  started_at: string | null;
+  logs: JobLog[];
+}
+
 export interface MetricsSummary {
   total_jobs: number;
   queued_jobs: number;
@@ -23,4 +39,3 @@ export interface MetricsSummary {
   average_latency_ms: number;
   total_retries: number;
 }
-

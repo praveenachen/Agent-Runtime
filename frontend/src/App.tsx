@@ -1,9 +1,10 @@
-import { Activity, BarChart3, CheckCircle2, Clock3, RefreshCw, Send, XCircle } from "lucide-react";
+import { Activity, BarChart3, CheckCircle2, Clock3, RotateCcw, RefreshCw, Send, XCircle } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
-import { fetchJobs, fetchMetricsSummary, submitJob } from "./api/client";
+import { fetchJob, fetchJobs, fetchMetricsSummary, retryJob, submitJob } from "./api/client";
 import { StatusBadge } from "./components/StatusBadge";
-import type { JobListItem, MetricsSummary, WorkflowType } from "./types";
+import type { JobListItem, JobRead, MetricsSummary, WorkflowType } from "./types";
 import "./styles.css";
 
 const workflows: { value: WorkflowType; label: string }[] = [
@@ -27,6 +28,8 @@ export default function App() {
   const [workflowType, setWorkflowType] = useState<WorkflowType>("summarize_text");
   const [text, setText] = useState("");
   const [jobs, setJobs] = useState<JobListItem[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedJob, setSelectedJob] = useState<JobRead | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary>(defaultMetrics);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +38,9 @@ export default function App() {
     const [nextJobs, nextMetrics] = await Promise.all([fetchJobs(), fetchMetricsSummary()]);
     setJobs(nextJobs);
     setMetrics(nextMetrics);
+    if (selectedJobId) {
+      setSelectedJob(await fetchJob(selectedJobId));
+    }
   }
 
   useEffect(() => {
@@ -57,6 +63,22 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Unable to submit job");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleSelectJob(jobId: string) {
+    setSelectedJobId(jobId);
+    setSelectedJob(await fetchJob(jobId));
+  }
+
+  async function handleRetry() {
+    if (!selectedJob) return;
+    setError(null);
+    try {
+      await retryJob(selectedJob.id);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to retry job");
     }
   }
 
@@ -132,7 +154,11 @@ export default function App() {
               </thead>
               <tbody>
                 {jobs.map((job) => (
-                  <tr key={job.id}>
+                  <tr
+                    key={job.id}
+                    className={selectedJobId === job.id ? "selected-row" : ""}
+                    onClick={() => handleSelectJob(job.id)}
+                  >
                     <td className="mono">{job.id.slice(0, 8)}</td>
                     <td>{job.workflow_type}</td>
                     <td><StatusBadge status={job.status} /></td>
@@ -151,11 +177,61 @@ export default function App() {
           </div>
         </section>
       </section>
+
+      {selectedJob && (
+        <section className="detail-panel">
+          <div className="section-heading">
+            <div>
+              <h2>Job detail</h2>
+              <p className="detail-id">{selectedJob.id}</p>
+            </div>
+            <div className="detail-actions">
+              <StatusBadge status={selectedJob.status} />
+              {selectedJob.status === "failed" && (
+                <button className="secondary-button" onClick={handleRetry}>
+                  <RotateCcw size={16} />
+                  Retry
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="detail-grid">
+            <InfoBlock label="Workflow" value={selectedJob.workflow_type} />
+            <InfoBlock label="Retries" value={`${selectedJob.retry_count}/${selectedJob.max_retries}`} />
+            <InfoBlock label="Started" value={selectedJob.started_at ? new Date(selectedJob.started_at).toLocaleString() : "-"} />
+            <InfoBlock label="Completed" value={selectedJob.completed_at ? new Date(selectedJob.completed_at).toLocaleString() : "-"} />
+          </div>
+
+          <div className="artifact-grid">
+            <Artifact title="Input payload" value={selectedJob.input_payload} />
+            <Artifact title="Output payload" value={selectedJob.output_payload ?? {}} />
+          </div>
+
+          {selectedJob.error_message && (
+            <div className="error-box">
+              <strong>Error</strong>
+              <pre>{selectedJob.error_message}</pre>
+            </div>
+          )}
+
+          <div className="logs-panel">
+            <h2>Execution logs</h2>
+            {selectedJob.logs.map((log) => (
+              <div className="log-line" key={log.id}>
+                <span>{new Date(log.created_at).toLocaleTimeString()}</span>
+                <strong>{log.level}</strong>
+                <p>{log.message}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
 
-function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | number }) {
+function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
   return (
     <article className="metric-card">
       <div className="metric-icon">{icon}</div>
@@ -165,3 +241,20 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
   );
 }
 
+function InfoBlock({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="info-block">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Artifact({ title, value }: { title: string; value: Record<string, unknown> }) {
+  return (
+    <div className="artifact">
+      <h2>{title}</h2>
+      <pre>{JSON.stringify(value, null, 2)}</pre>
+    </div>
+  );
+}

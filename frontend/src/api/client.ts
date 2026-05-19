@@ -1,4 +1,4 @@
-import type { JobListItem, MetricsSummary, WorkflowType } from "../types";
+import type { JobListItem, JobRead, MetricsSummary, WorkflowType } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -11,6 +11,12 @@ export async function fetchJobs(): Promise<JobListItem[]> {
 export async function fetchMetricsSummary(): Promise<MetricsSummary> {
   const response = await fetch(`${API_BASE_URL}/metrics-summary`);
   if (!response.ok) throw new Error("Unable to load metrics");
+  return response.json();
+}
+
+export async function fetchJob(jobId: string): Promise<JobRead> {
+  const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`);
+  if (!response.ok) throw new Error("Unable to load job");
   return response.json();
 }
 
@@ -28,3 +34,10 @@ export async function submitJob(workflowType: WorkflowType, text: string): Promi
   }
 }
 
+export async function retryJob(jobId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/retry`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Unable to retry job");
+  }
+}

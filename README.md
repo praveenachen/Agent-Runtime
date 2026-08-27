@@ -233,9 +233,3 @@ RQ and Redis keep async execution understandable for a portfolio project. For he
 - Provider selection per workflow
 - CI pipeline with linting, tests, and Docker build checks
 
-## Resume Positioning
-
-- Built an AI workflow orchestration platform that queues, executes, retries, and monitors asynchronous LLM-powered tasks using Redis-backed worker systems and modular FastAPI services.
-- Designed infrastructure for structured output validation, telemetry tracking, failure recovery, and execution history across AI workflows.
-- Implemented observability tooling including execution logs, latency metrics, retry monitoring, and workflow analytics to improve reliability of production-style AI systems.
-

@@ -20,18 +20,23 @@ export async function fetchJob(jobId: string): Promise<JobRead> {
   return response.json();
 }
 
-export async function submitJob(workflowType: WorkflowType, text: string): Promise<void> {
+export async function submitJob(workflowType: WorkflowType, text: string, idempotencyKey: string): Promise<void> {
   const input_payload =
     workflowType === "classify_message" ? { message: text } : { text };
   const response = await fetch(`${API_BASE_URL}/jobs`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ workflow_type: workflowType, input_payload }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail ?? "Unable to submit job");
   }
+}
+
+export async function cancelJob(jobId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/cancel`, { method: "POST" });
+  if (!response.ok) throw new Error("Unable to cancel job");
 }
 
 export async function retryJob(jobId: string): Promise<void> {

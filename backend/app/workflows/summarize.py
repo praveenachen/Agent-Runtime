@@ -13,4 +13,3 @@ def summarize_text(input_payload: dict, provider: AIProvider) -> SummaryOutput:
     validated_input = SummarizeInput.model_validate(input_payload)
     raw_output = provider.generate_json(SYSTEM_PROMPT, validated_input.model_dump())
     return SummaryOutput.model_validate(raw_output)
-

@@ -14,7 +14,9 @@ def test_summarize_text_returns_valid_output() -> None:
 
 
 def test_extract_structured_data_returns_valid_output() -> None:
-    result = extract_structured_data({"text": "Acme needs a follow-up by Friday."}, MockAIProvider())
+    result = extract_structured_data(
+        {"text": "Acme needs a follow-up by Friday."}, MockAIProvider()
+    )
 
     assert isinstance(result, StructuredDataOutput)
     assert result.action_items == []
@@ -26,3 +28,14 @@ def test_classify_message_returns_valid_output() -> None:
     assert isinstance(result, ClassificationOutput)
     assert 0 <= result.confidence <= 1
 
+
+def test_empty_extraction_output_does_not_succeed():
+    import pytest
+    from pydantic import ValidationError
+
+    class EmptyProvider(MockAIProvider):
+        def generate_json(self, *args):
+            return {}
+
+    with pytest.raises(ValidationError):
+        extract_structured_data({"text": "hello"}, EmptyProvider())

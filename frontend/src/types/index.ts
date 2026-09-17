@@ -1,4 +1,4 @@
-export type JobStatus = "queued" | "running" | "completed" | "failed";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type WorkflowType = "summarize_text" | "extract_structured_data" | "classify_message";
 
@@ -27,6 +27,9 @@ export interface JobRead extends JobListItem {
   error_message: string | null;
   started_at: string | null;
   logs: JobLog[];
+  correlation_id: string;
+  attempt_count: number;
+  error: { code: string; message: string; retryable: boolean } | null;
 }
 
 export interface MetricsSummary {

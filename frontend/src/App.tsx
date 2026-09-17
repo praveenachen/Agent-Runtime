@@ -1,10 +1,33 @@
-import { Activity, BarChart3, CheckCircle2, Clock3, RotateCcw, RefreshCw, Send, XCircle } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import {
+  Activity,
+  BarChart3,
+  CheckCircle2,
+  Clock3,
+  RotateCcw,
+  RefreshCw,
+  Send,
+  XCircle,
+  Terminal,
+  Layers3,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 
-import { fetchJob, fetchJobs, fetchMetricsSummary, retryJob, submitJob } from "./api/client";
+import {
+  cancelJob,
+  fetchJob,
+  fetchJobs,
+  fetchMetricsSummary,
+  retryJob,
+  submitJob,
+} from "./api/client";
 import { StatusBadge } from "./components/StatusBadge";
-import type { JobListItem, JobRead, MetricsSummary, WorkflowType } from "./types";
+import type {
+  JobListItem,
+  JobRead,
+  MetricsSummary,
+  WorkflowType,
+} from "./types";
 import "./styles.css";
 
 const workflows: { value: WorkflowType; label: string }[] = [
@@ -25,7 +48,8 @@ const defaultMetrics: MetricsSummary = {
 };
 
 export default function App() {
-  const [workflowType, setWorkflowType] = useState<WorkflowType>("summarize_text");
+  const [workflowType, setWorkflowType] =
+    useState<WorkflowType>("summarize_text");
   const [text, setText] = useState("");
   const [jobs, setJobs] = useState<JobListItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -33,9 +57,15 @@ export default function App() {
   const [metrics, setMetrics] = useState<MetricsSummary>(defaultMetrics);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingSubmission = useRef<{ fingerprint: string; key: string } | null>(
+    null,
+  );
 
   async function loadDashboard() {
-    const [nextJobs, nextMetrics] = await Promise.all([fetchJobs(), fetchMetricsSummary()]);
+    const [nextJobs, nextMetrics] = await Promise.all([
+      fetchJobs(),
+      fetchMetricsSummary(),
+    ]);
     setJobs(nextJobs);
     setMetrics(nextMetrics);
     if (selectedJobId) {
@@ -49,14 +79,19 @@ export default function App() {
       loadDashboard().catch((err) => setError(err.message));
     }, 3000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [selectedJobId]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     setIsSubmitting(true);
     try {
-      await submitJob(workflowType, text);
+      const fingerprint = JSON.stringify([workflowType, text]);
+      if (pendingSubmission.current?.fingerprint !== fingerprint) {
+        pendingSubmission.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      await submitJob(workflowType, text, pendingSubmission.current.key);
+      pendingSubmission.current = null;
       setText("");
       await loadDashboard();
     } catch (err) {
@@ -82,26 +117,74 @@ export default function App() {
     }
   }
 
-  const runningCount = useMemo(() => metrics.queued_jobs + metrics.running_jobs, [metrics]);
+  async function handleCancel() {
+    if (!selectedJob) return;
+    try {
+      await cancelJob(selectedJob.id);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to cancel job");
+    }
+  }
+
+  const runningCount = useMemo(
+    () => metrics.queued_jobs + metrics.running_jobs,
+    [metrics],
+  );
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">AI workflow operations</p>
-          <h1>Agent Runtime</h1>
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true">
+            <Terminal size={24} />
+          </div>
+          <div>
+            <p className="eyebrow">Execution / observability</p>
+            <h1>Agent Runtime</h1>
+          </div>
         </div>
-        <button className="icon-button" onClick={() => loadDashboard()} title="Refresh dashboard">
+        <button
+          className="icon-button"
+          onClick={() => loadDashboard()}
+          title="Refresh dashboard"
+          aria-label="Refresh dashboard"
+        >
           <RefreshCw size={18} />
         </button>
       </header>
 
       <section className="metrics-grid" aria-label="Workflow metrics">
-        <MetricCard icon={<BarChart3 />} label="Total jobs" value={metrics.total_jobs} />
-        <MetricCard icon={<CheckCircle2 />} label="Success rate" value={`${metrics.success_rate}%`} />
-        <MetricCard icon={<XCircle />} label="Failures" value={metrics.failed_jobs} />
-        <MetricCard icon={<Clock3 />} label="Avg latency" value={`${metrics.average_latency_ms} ms`} />
-        <MetricCard icon={<Activity />} label="In flight" value={runningCount} />
+        <MetricCard
+          tone="blue"
+          icon={<BarChart3 />}
+          label="Total jobs"
+          value={metrics.total_jobs}
+        />
+        <MetricCard
+          tone="green"
+          icon={<CheckCircle2 />}
+          label="Success rate"
+          value={`${metrics.success_rate}%`}
+        />
+        <MetricCard
+          tone="purple"
+          icon={<XCircle />}
+          label="Failures"
+          value={metrics.failed_jobs}
+        />
+        <MetricCard
+          tone="indigo"
+          icon={<Clock3 />}
+          label="Avg latency"
+          value={`${metrics.average_latency_ms} ms`}
+        />
+        <MetricCard
+          tone="cyan"
+          icon={<Activity />}
+          label="In flight"
+          value={runningCount}
+        />
       </section>
 
       <section className="workspace">
@@ -112,7 +195,12 @@ export default function App() {
           </div>
           <label>
             Workflow
-            <select value={workflowType} onChange={(event) => setWorkflowType(event.target.value as WorkflowType)}>
+            <select
+              value={workflowType}
+              onChange={(event) =>
+                setWorkflowType(event.target.value as WorkflowType)
+              }
+            >
               {workflows.map((workflow) => (
                 <option key={workflow.value} value={workflow.value}>
                   {workflow.label}
@@ -130,7 +218,11 @@ export default function App() {
             />
           </label>
           {error && <p className="error-text">{error}</p>}
-          <button className="primary-button" disabled={isSubmitting || !text.trim()}>
+          <button
+            className="primary-button"
+            disabled={isSubmitting || !text.trim()}
+          >
+            <Send size={15} aria-hidden="true" />
             {isSubmitting ? "Submitting" : "Queue job"}
           </button>
         </form>
@@ -159,17 +251,43 @@ export default function App() {
                     className={selectedJobId === job.id ? "selected-row" : ""}
                     onClick={() => handleSelectJob(job.id)}
                   >
-                    <td className="mono">{job.id.slice(0, 8)}</td>
+                    <td className="mono">
+                      <button
+                        className="job-link"
+                        aria-label={`View job ${job.id}`}
+                        aria-current={
+                          selectedJobId === job.id ? "true" : undefined
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleSelectJob(job.id);
+                        }}
+                      >
+                        {job.id.slice(0, 8)}
+                      </button>
+                    </td>
                     <td>{job.workflow_type}</td>
-                    <td><StatusBadge status={job.status} /></td>
-                    <td>{job.retry_count}/{job.max_retries}</td>
+                    <td>
+                      <StatusBadge status={job.status} />
+                    </td>
+                    <td>
+                      {job.retry_count}/{job.max_retries}
+                    </td>
                     <td>{job.latency_ms ? `${job.latency_ms} ms` : "-"}</td>
                     <td>{new Date(job.created_at).toLocaleString()}</td>
                   </tr>
                 ))}
                 {jobs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="empty-cell">No workflow jobs yet</td>
+                    <td colSpan={6} className="empty-cell">
+                      <div className="empty-state">
+                        <Layers3 size={23} aria-hidden="true" />
+                        <strong>No workflow jobs yet</strong>
+                        <span>
+                          Queue a workflow to begin monitoring its execution.
+                        </span>
+                      </div>
+                    </td>
                   </tr>
                 )}
               </tbody>
@@ -187,25 +305,53 @@ export default function App() {
             </div>
             <div className="detail-actions">
               <StatusBadge status={selectedJob.status} />
-              {selectedJob.status === "failed" && (
-                <button className="secondary-button" onClick={handleRetry}>
-                  <RotateCcw size={16} />
-                  Retry
+              {(selectedJob.status === "queued" ||
+                selectedJob.status === "running") && (
+                <button className="secondary-button" onClick={handleCancel}>
+                  Cancel
                 </button>
               )}
+              {selectedJob.status === "failed" &&
+                selectedJob.error?.retryable &&
+                selectedJob.retry_count < selectedJob.max_retries && (
+                  <button className="secondary-button" onClick={handleRetry}>
+                    <RotateCcw size={16} />
+                    Retry
+                  </button>
+                )}
             </div>
           </div>
 
           <div className="detail-grid">
             <InfoBlock label="Workflow" value={selectedJob.workflow_type} />
-            <InfoBlock label="Retries" value={`${selectedJob.retry_count}/${selectedJob.max_retries}`} />
-            <InfoBlock label="Started" value={selectedJob.started_at ? new Date(selectedJob.started_at).toLocaleString() : "-"} />
-            <InfoBlock label="Completed" value={selectedJob.completed_at ? new Date(selectedJob.completed_at).toLocaleString() : "-"} />
+            <InfoBlock
+              label="Retries"
+              value={`${selectedJob.retry_count}/${selectedJob.max_retries}`}
+            />
+            <InfoBlock
+              label="Started"
+              value={
+                selectedJob.started_at
+                  ? new Date(selectedJob.started_at).toLocaleString()
+                  : "-"
+              }
+            />
+            <InfoBlock
+              label="Completed"
+              value={
+                selectedJob.completed_at
+                  ? new Date(selectedJob.completed_at).toLocaleString()
+                  : "-"
+              }
+            />
           </div>
 
           <div className="artifact-grid">
             <Artifact title="Input payload" value={selectedJob.input_payload} />
-            <Artifact title="Output payload" value={selectedJob.output_payload ?? {}} />
+            <Artifact
+              title="Output payload"
+              value={selectedJob.output_payload ?? {}}
+            />
           </div>
 
           {selectedJob.error_message && (
@@ -218,7 +364,7 @@ export default function App() {
           <div className="logs-panel">
             <h2>Execution logs</h2>
             {selectedJob.logs.map((log) => (
-              <div className="log-line" key={log.id}>
+              <div className={`log-line log-${log.level}`} key={log.id}>
                 <span>{new Date(log.created_at).toLocaleTimeString()}</span>
                 <strong>{log.level}</strong>
                 <p>{log.message}</p>
@@ -231,17 +377,35 @@ export default function App() {
   );
 }
 
-function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
+function MetricCard({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string | number;
+  tone: "blue" | "green" | "purple" | "indigo" | "cyan";
+}) {
   return (
-    <article className="metric-card">
-      <div className="metric-icon">{icon}</div>
+    <article className={`metric-card metric-${tone}`}>
+      <div className="metric-icon" aria-hidden="true">
+        {icon}
+      </div>
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
   );
 }
 
-function InfoBlock({ label, value }: { label: string; value: string | number }) {
+function InfoBlock({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <div className="info-block">
       <span>{label}</span>
@@ -250,7 +414,13 @@ function InfoBlock({ label, value }: { label: string; value: string | number }) 
   );
 }
 
-function Artifact({ title, value }: { title: string; value: Record<string, unknown> }) {
+function Artifact({
+  title,
+  value,
+}: {
+  title: string;
+  value: Record<string, unknown>;
+}) {
   return (
     <div className="artifact">
       <h2>{title}</h2>

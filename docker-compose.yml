@@ -1,39 +1,65 @@
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     build:
       context: ./backend
-    environment:
+    environment: &runtime-environment
       DATABASE_URL: sqlite:////data/agent_runtime.db
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-60}
+      RETRY_BASE_SECONDS: ${RETRY_BASE_SECONDS:-5}
+      RETRY_MAX_SECONDS: ${RETRY_MAX_SECONDS:-60}
+      DISPATCH_INTERVAL_SECONDS: ${DISPATCH_INTERVAL_SECONDS:-2}
+      REDISPATCH_SECONDS: ${REDISPATCH_SECONDS:-30}
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000
     volumes:
       - ./data:/data
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   worker:
     build:
       context: ./backend
     command: ["rq", "worker", "agent-runtime", "--url", "redis://redis:6379/0"]
-    environment:
-      DATABASE_URL: sqlite:////data/agent_runtime.db
-      REDIS_URL: redis://redis:6379/0
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    environment: *runtime-environment
     volumes:
       - ./data:/data
     depends_on:
-      - redis
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.workers.dispatcher"]
+    environment: *runtime-environment
+    volumes:
+      - ./data:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:
@@ -41,7 +67,9 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       - backend
 
+volumes:
+  redis-data:

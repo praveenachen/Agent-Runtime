@@ -15,4 +15,3 @@ def extract_structured_data(input_payload: dict, provider: AIProvider) -> Struct
     validated_input = ExtractInput.model_validate(input_payload)
     raw_output = provider.generate_json(SYSTEM_PROMPT, validated_input.model_dump())
     return StructuredDataOutput.model_validate(raw_output)
-

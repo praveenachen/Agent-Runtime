@@ -15,7 +15,9 @@ class MockAIProvider(AIProvider):
             words = text.split()
             return {
                 "summary": " ".join(words[:35]) or "No text provided.",
-                "key_points": [sentence.strip() for sentence in text.split(".")[:3] if sentence.strip()],
+                "key_points": [
+                    sentence.strip() for sentence in text.split(".")[:3] if sentence.strip()
+                ],
             }
         if "extract" in system_prompt.lower():
             return {
@@ -30,4 +32,3 @@ class MockAIProvider(AIProvider):
             "sentiment": "neutral",
             "confidence": 0.72,
         }
-

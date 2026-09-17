@@ -1,6 +1,6 @@
 # Agent Runtime
 
-Agent Runtime is a production-style AI workflow orchestration platform. It demonstrates how backend systems can queue, execute, validate, retry, observe, and inspect LLM-powered work without turning the product into a generic chatbot.
+Agent Runtime is reliable execution infrastructure for AI workflows. It queues, executes, validates, retries, and inspects domain-agnostic work behind a typed API.
 
 The app lets a user submit structured AI workflow jobs through an API or dashboard. Jobs are persisted, pushed to a Redis-backed queue, executed asynchronously by a worker, validated with Pydantic, retried on failure, and surfaced through operational metrics and execution logs.
 
@@ -38,7 +38,7 @@ FastAPI service ---- SQLite database
 5. The AI provider returns JSON output.
 6. Pydantic validates the workflow-specific response schema.
 7. The worker stores output, logs status transitions, records latency, and marks the job `completed`.
-8. If execution or validation fails, the worker retries until `max_retries` is reached, then marks the job `failed`.
+8. Transient provider failures schedule bounded exponential retries in SQLite. Permanent validation failures fail immediately. A dispatcher delivers due work and expires abandoned runs.
 9. The dashboard polls for job status, metrics, logs, output, and retry controls.
 
 ## Tech Stack
@@ -55,7 +55,7 @@ FastAPI service ---- SQLite database
 
 - Submit asynchronous AI workflow jobs
 - List and inspect workflow executions
-- Track status transitions: `queued`, `running`, `completed`, `failed`
+- Track status transitions: `queued`, `running`, `completed`, `failed`, `cancelled`, `timed_out`
 - Validate structured LLM outputs with Pydantic
 - Retry failed workflow executions automatically and manually
 - Persist input, output, errors, timestamps, latency, retry counts, and logs
@@ -127,7 +127,8 @@ Output:
 | `POST` | `/jobs` | Submit a workflow job |
 | `GET` | `/jobs` | List recent jobs |
 | `GET` | `/jobs/{job_id}` | Retrieve job status, payloads, logs, errors, and timestamps |
-| `POST` | `/jobs/{job_id}/retry` | Retry a failed job |
+| `POST` | `/jobs/{job_id}/retry` | Retry an eligible transient failure within its remaining budget |
+| `POST` | `/jobs/{job_id}/cancel` | Cancel queued/running work; terminal jobs are returned unchanged |
 | `GET` | `/metrics-summary` | Return workflow analytics for the dashboard |
 | `GET` | `/metrics` | Return Prometheus-compatible metrics |
 | `GET` | `/health` | Health check |
@@ -174,10 +175,10 @@ Backend:
 
 ```bash
 cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+python3.12 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --reload
 ```
 
 Worker:
@@ -186,6 +187,15 @@ Worker:
 cd backend
 rq worker agent-runtime --url redis://localhost:6379/0
 ```
+
+Dispatcher (required for retries, queue recovery, and abandoned-worker recovery):
+
+```bash
+cd backend
+REDIS_URL=redis://localhost:6379/0 python -m app.workers.dispatcher
+```
+
+Run the API once before starting workers to initialize/upgrade the SQLite schema. All three processes must use the same database path and Redis URL.
 
 Frontend:
 
@@ -213,17 +223,44 @@ Agent Runtime records observability signals at the workflow level:
   - `agent_job_latency_seconds`
   - `agent_job_retries_total`
 
-## Reliability Tradeoffs
+## Execution guarantees and limits
 
-This project intentionally uses SQLite for a simple local MVP. SQLite is easy to run and demo, but PostgreSQL would be a better production database for concurrent writes, migrations, and operational tooling.
+- **State:** `queued → running → completed` (`completed` is the existing success spelling). Cancellation, permanent failure, or timeout are terminal. Conditional updates match both status and attempt number, so duplicate messages and stale workers cannot overwrite newer state. `attempt_count` counts started attempts; `retry_count` counts scheduled retries and is never reset by manual retry.
+- **Retry policy:** at most `1 + max_retries` attempts (default 3, maximum 6). Only provider connection/5xx failures, rate limits, and provider timeouts retry. Delay is `min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** retry_count)` before incrementing the count; defaults are 60 and 5 seconds. SDK retries are disabled. Invalid requests/output, cancellation, execution timeout, and unexpected internal errors do not auto-retry.
+- **Durability:** SQLite is the source of truth on the shared local disk. Queued rows also act as a durable outbox: the dispatcher scans due work every 2 seconds, with a 30-second resend lease. Redis failures or a crash between persistence and enqueue leave recoverable work. Redis AOF is enabled in Compose. Atomic worker claims make duplicate queue deliveries harmless. The API still returns 202 when Redis is unavailable because it has durably accepted the work.
+- **Worker failure:** RQ enforces each attempt's execution timeout. The dispatcher marks a running job `timed_out` after its persisted deadline if a worker is killed or disappears. Recovery may lag by the dispatcher interval or its downtime. Unknown external outcomes are not automatically replayed after execution timeout. A live worker's late result is discarded.
+- **Timeouts:** HTTP client/network timeout does not cancel accepted work. Queue wait is measured separately and has no expiry in this phase. `timeout_seconds` (1–3600, default 300) applies per execution attempt; `PROVIDER_TIMEOUT_SECONDS` defaults to 60. A client that loses the submission response should resubmit with the same idempotency key.
+- **Cancellation:** `POST /jobs/{id}/cancel` atomically cancels queued or running work, preventing future attempts and result publication. In-flight provider calls are not forcibly interrupted and may still incur charges or complete external side effects. Completed/failed/timed-out jobs remain unchanged. Repeated cancellation is safe.
+- **Idempotency:** send a caller-owned `Idempotency-Key` header (or `idempotency_key` body field), reused across HTTP retries. Identical validated requests return the same job; changed input, retry budget, or timeout with the same key returns 409. Keys are unique across this single-service database and retained with job history. Omitted keys create independent jobs. The dashboard retains a key across failed submission attempts for unchanged input within the current page session; reloads do not retain it.
+- **External effects:** submission deduplication is not an exactly-once guarantee for external systems. A provider timeout may have an unknown external outcome; retries can repeat a provider call. Future side-effecting handlers must propagate a stable operation key to downstream systems that support idempotency, or avoid retrying ambiguous outcomes.
 
-Prometheus metrics are generated from persisted job state, which keeps the API and worker consistent in a multi-process local setup. A larger production system could emit native counters from each process and aggregate them through Prometheus.
+SQLite is appropriate for this single-host deployment with short transactions and a modest worker count. API, workers, and dispatcher share a persisted volume. Startup applies an additive, serialized SQLite migration that preserves existing history; back up the database and stop older processes before upgrading. Do not share this file over a network filesystem. RQ/Redis provides process isolation and hard attempt timeouts without replacing the existing queue stack. Multi-host deployment and high write concurrency are outside this configuration's scope.
 
-RQ and Redis keep async execution understandable for a portfolio project. For heavier workloads, scheduled workflows, or complex routing, Celery, Temporal, or a managed queue could be introduced later.
+Logs include execution/correlation IDs, handler, attempt, status, queue/run latency, and safe error codes. Provider start logs name the adapter. Raw SDK exceptions, prompts, API keys, and validation inputs are not logged. API errors retain the existing `error_message` field and add typed `error: {code, message, retryable}`. Prometheus values are database snapshot **gauges**, including the legacy metric names ending in `_total`; counts can decrease if history is removed or a database is restored. Latency metrics describe each job's most recent attempt, not a cumulative histogram.
+
+## API compatibility and security
+
+Existing `/jobs` routes, workflow names, response fields, and `completed` status remain. Additions include cancellation, `attempt_count`, `timeout_seconds`, `idempotency_key`, `correlation_id`, `queue_latency_ms`, `next_attempt_at`, and typed `error`. `X-Correlation-ID` can be supplied as a header or `correlation_id` in the body; it is returned on submit/status responses. A missing correlation ID is generated once. Conflicting header/body identifiers return 422. Workflow input is now validated before queueing (422), and retry budgets cannot be reset through the manual retry endpoint.
+
+Relay 2.0's `RuntimeClient` / `AgentRuntimeHttpClient` sources are not present in this repository. The existing runtime contract is preserved, but end-to-end Relay compatibility cannot be certified without those client definitions. No Relay code or domain-specific routes were added.
+
+There is no built-in service authentication or tenant isolation. Compose binds API/dashboard ports to localhost and leaves Redis internal. For remote deployment, require authentication and TLS at a trusted gateway; do not expose the unauthenticated API directly. Provider secrets stay in backend/worker environment variables and never enter dashboard configuration. Handlers are selected from the existing explicit registry; request data cannot select arbitrary Python imports or commands. `/health` is a liveness check, not a Redis/worker readiness guarantee.
+
+## Validation
+
+From the repository root, with backend development dependencies installed:
+
+```bash
+python -m pytest -q
+ruff check backend
+ruff format --check backend
+cd frontend && npm ci && npm run build
+```
+
+Tests use fake providers and queue delivery stubs; no real AI credentials or external AI calls are needed. They cover lifecycle, concurrency, idempotency conflicts, retries/backoff, provider normalization, invalid output, cancellation races, timeout/recovery, migration, and the HTTP contract. Backend type checking is not configured; the frontend build runs TypeScript checking. A real Redis/RQ/Docker smoke test remains a separate deployment check.
 
 ## Future Improvements
 
-- PostgreSQL and Alembic migrations
 - Authentication for dashboard/API access
 - Workflow versioning
 - Dead-letter queue view
@@ -231,5 +268,4 @@ RQ and Redis keep async execution understandable for a portfolio project. For he
 - OpenTelemetry traces
 - More workflow types with multi-step orchestration
 - Provider selection per workflow
-- CI pipeline with linting, tests, and Docker build checks
 

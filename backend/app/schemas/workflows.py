@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -10,19 +11,19 @@ class WorkflowType(StrEnum):
 
 
 class SummarizeInput(BaseModel):
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=100_000)
 
 
 class ExtractInput(BaseModel):
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=100_000)
 
 
 class ClassifyInput(BaseModel):
-    message: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1, max_length=100_000)
 
 
 class SummaryOutput(BaseModel):
-    summary: str
+    summary: str = Field(min_length=1)
     key_points: list[str] = Field(default_factory=list)
 
 
@@ -33,15 +34,21 @@ class ExtractedEntity(BaseModel):
 
 
 class StructuredDataOutput(BaseModel):
-    title: str | None = None
-    entities: list[ExtractedEntity] = Field(default_factory=list)
-    dates: list[str] = Field(default_factory=list)
-    action_items: list[str] = Field(default_factory=list)
+    title: str | None
+    entities: list[ExtractedEntity]
+    dates: list[str]
+    action_items: list[str]
 
 
 class ClassificationOutput(BaseModel):
-    category: str
-    priority: str
-    sentiment: str
+    category: Literal["support", "sales", "incident", "feedback", "general"]
+    priority: Literal["low", "normal", "high", "urgent"]
+    sentiment: Literal["negative", "neutral", "positive"]
     confidence: float = Field(..., ge=0, le=1)
 
+
+INPUT_MODELS = {
+    WorkflowType.summarize_text: SummarizeInput,
+    WorkflowType.extract_structured_data: ExtractInput,
+    WorkflowType.classify_message: ClassifyInput,
+}

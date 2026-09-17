@@ -1,5 +1,5 @@
-from app.services.workflow_service import WorkflowService
 from app.schemas.workflows import WorkflowType
+from app.services.workflow_service import WorkflowService
 from app.workflows.classify import classify_message
 from app.workflows.extract import extract_structured_data
 from app.workflows.summarize import summarize_text

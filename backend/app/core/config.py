@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    provider_timeout_seconds: float = Field(default=60, gt=0, le=300)
+    retry_base_seconds: int = Field(default=5, ge=1, le=300)
+    retry_max_seconds: int = Field(default=60, ge=1, le=3600)
+    dispatch_interval_seconds: int = Field(default=2, ge=1, le=60)
+    redispatch_seconds: int = Field(default=30, ge=5, le=300)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -24,4 +30,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

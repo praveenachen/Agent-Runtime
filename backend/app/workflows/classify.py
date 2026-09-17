@@ -15,4 +15,3 @@ def classify_message(input_payload: dict, provider: AIProvider) -> Classificatio
     validated_input = ClassifyInput.model_validate(input_payload)
     raw_output = provider.generate_json(SYSTEM_PROMPT, validated_input.model_dump())
     return ClassificationOutput.model_validate(raw_output)
-

@@ -7,8 +7,12 @@ __pycache__/
 venv/
 .env
 .env.local
+.env.*
+!.env.example
 *.db
+*.db-*
 *.sqlite
+*.sqlite-*
 dist/
 build/
 node_modules/

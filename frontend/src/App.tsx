@@ -325,8 +325,8 @@ export default function App() {
           <div className="detail-grid">
             <InfoBlock label="Workflow" value={selectedJob.workflow_type} />
             <InfoBlock
-              label="Retries"
-              value={`${selectedJob.retry_count}/${selectedJob.max_retries}`}
+              label="Attempts / retries"
+              value={`${selectedJob.attempt_count} started · ${selectedJob.retry_count}/${selectedJob.max_retries} retries`}
             />
             <InfoBlock
               label="Started"
@@ -356,7 +356,7 @@ export default function App() {
 
           {selectedJob.error_message && (
             <div className="error-box">
-              <strong>Error</strong>
+              <strong>{selectedJob.error?.code ?? "Error"}</strong>
               <pre>{selectedJob.error_message}</pre>
             </div>
           )}

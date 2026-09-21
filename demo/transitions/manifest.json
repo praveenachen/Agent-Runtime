@@ -1,0 +1,20 @@
+[
+  {
+    "file": "01-normal-execution.mp4",
+    "eyebrow": "WORKFLOW 01 · SUMMARIZE TEXT",
+    "title": "NORMAL EXECUTION",
+    "subtitle": "Queued → Running → Completed"
+  },
+  {
+    "file": "02-retry-and-recovery.mp4",
+    "eyebrow": "WORKFLOW 02 · EXTRACT STRUCTURED DATA",
+    "title": "RETRY & RECOVERY",
+    "subtitle": "Transient failure → Scheduled retry → Validated output"
+  },
+  {
+    "file": "03-idempotency-test.mp4",
+    "eyebrow": "WORKFLOW 03 · CLASSIFY MESSAGE",
+    "title": "IDEMPOTENCY TEST",
+    "subtitle": "Same request · Same key · One execution"
+  }
+]

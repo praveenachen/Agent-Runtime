@@ -1,6 +1,7 @@
 import time
+from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rq.timeouts import JobTimeoutException
 from sqlalchemy import update
 
@@ -22,7 +23,12 @@ class ObservedProvider(AIProvider):
         self.service = service
         self.job = job
 
-    def generate_json(self, system_prompt: str, user_payload: dict) -> dict:
+    def generate_structured(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        output_model: type[BaseModel],
+    ) -> dict[str, Any]:
         self.service.event(self.job, "Provider request started")
         started = time.monotonic()
         if get_settings().demo_enabled and self.job.demo_scenario == "slow_execution":
@@ -30,7 +36,9 @@ class ObservedProvider(AIProvider):
         if get_settings().demo_enabled and self.job.demo_scenario == "malformed_output":
             result = {}
         else:
-            result = self.provider.generate_json(system_prompt, user_payload)
+            result = self.provider.generate_structured(
+                system_prompt, user_payload, output_model=output_model
+            )
         self.service.event(
             self.job,
             "Provider response received",

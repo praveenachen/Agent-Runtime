@@ -24,7 +24,7 @@ These records describe the implemented single-host runtime, not a future platfor
 
 - **Problem:** Vendor SDK errors and malformed model responses should not leak into runtime state or couple handlers to one SDK.
 - **Options:** Direct SDK calls in handlers; a small provider interface; a general orchestration framework.
-- **Decision:** Handlers call `AIProvider.generate_json`. The OpenAI adapter maps network/status failures to runtime error categories; a deterministic mock supports local use and tests. Input and output schemas use Pydantic.
+- **Decision:** Handlers call `AIProvider.generate_structured` with their expected Pydantic output model. The OpenAI adapter maps network/status failures to runtime error categories; a deterministic mock supports local use and tests. Input and output schemas use Pydantic.
 - **Why:** The current three handlers need JSON generation and validation, not a framework. SDK calls stay inside the adapter; success requires validated output.
 - **Tradeoff:** Only one real provider is implemented. Schema compliance cannot guarantee semantic truth. Invalid output fails immediately rather than entering an implicit repair loop.
 - **When reconsidered:** A second provider, streaming, tool calling, or different modalities create concrete requirements that the current interface cannot express.

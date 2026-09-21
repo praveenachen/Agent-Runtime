@@ -140,7 +140,7 @@ def test_retry_exhaustion(runtime, monkeypatch):
 
 def test_invalid_output_is_permanent_and_redacted(runtime, monkeypatch):
     class BadProvider(MockAIProvider):
-        def generate_json(self, *args):
+        def generate_structured(self, *args, **kwargs):
             return {"summary": {"secret": "sensitive prompt"}}
 
     service = WorkflowService(BadProvider())
@@ -297,12 +297,20 @@ def client(runtime, monkeypatch):
 
 def test_api_contract(client):
     body = {"workflow_type": "summarize_text", "input_payload": {"text": "hello"}}
-    headers = {"Idempotency-Key": "request-1", "X-Correlation-ID": "trace-1"}
+    headers = {
+        "Idempotency-Key": "request-1",
+        "X-Correlation-ID": "trace-1",
+        "Origin": "http://localhost:5173",
+    }
     first = client.post("/jobs", json=body, headers=headers)
     assert first.status_code == 202
     assert first.headers["x-correlation-id"] == "trace-1"
+    assert first.headers["x-idempotency-reused"] == "false"
+    assert "X-Idempotency-Reused" in first.headers["access-control-expose-headers"]
     identity = first.json()["id"]
-    assert client.post("/jobs", json=body, headers=headers).json()["id"] == identity
+    replay = client.post("/jobs", json=body, headers=headers)
+    assert replay.json()["id"] == identity
+    assert replay.headers["x-idempotency-reused"] == "true"
     assert client.get(f"/jobs/{identity}").json()["status"] == "queued"
     assert client.post(f"/jobs/{identity}/cancel").json()["error"]["code"] == "ExecutionCancelled"
     assert client.get("/jobs/missing").status_code == 404

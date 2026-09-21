@@ -51,7 +51,7 @@ A job records its ID, handler (`workflow_type`), input/output, timestamps, attem
 
 ## Provider abstraction
 
-Handlers depend on `AIProvider.generate_json`, with an OpenAI adapter and deterministic `MockAIProvider`. With no API key, local execution uses the mock. Vendor exceptions are normalized inside the adapter; Pydantic validates handler output before success is persisted. Schema validity does not establish factual correctness.
+Handlers depend on `AIProvider.generate_structured`, passing their expected Pydantic output model to an OpenAI structured-output adapter or deterministic `MockAIProvider`. With no API key, local execution uses the mock. Vendor exceptions are normalized inside the adapter; Pydantic validates handler output before success is persisted. Schema validity does not establish factual correctness.
 
 The explicit registry includes `summarize_text`, `extract_structured_data`, and `classify_message` as small, generic examples. Requests cannot select arbitrary Python imports or commands. See [API contracts and examples](docs/api.md).
 

@@ -11,5 +11,7 @@ Return JSON with:
 
 def summarize_text(input_payload: dict, provider: AIProvider) -> SummaryOutput:
     validated_input = SummarizeInput.model_validate(input_payload)
-    raw_output = provider.generate_json(SYSTEM_PROMPT, validated_input.model_dump())
+    raw_output = provider.generate_structured(
+        SYSTEM_PROMPT, validated_input.model_dump(), output_model=SummaryOutput
+    )
     return SummaryOutput.model_validate(raw_output)

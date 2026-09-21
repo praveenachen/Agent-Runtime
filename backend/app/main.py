@@ -27,6 +27,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Idempotency-Reused"],
 )
 
 app.include_router(jobs_router)

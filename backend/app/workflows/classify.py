@@ -13,5 +13,7 @@ Return JSON with:
 
 def classify_message(input_payload: dict, provider: AIProvider) -> ClassificationOutput:
     validated_input = ClassifyInput.model_validate(input_payload)
-    raw_output = provider.generate_json(SYSTEM_PROMPT, validated_input.model_dump())
+    raw_output = provider.generate_structured(
+        SYSTEM_PROMPT, validated_input.model_dump(), output_model=ClassificationOutput
+    )
     return ClassificationOutput.model_validate(raw_output)

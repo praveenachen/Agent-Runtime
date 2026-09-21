@@ -18,6 +18,7 @@ import {
   fetchJob,
   fetchJobs,
   fetchMetricsSummary,
+  fetchRuntimeConfig,
   retryJob,
   submitJob,
 } from "./api/client";
@@ -47,6 +48,28 @@ const defaultMetrics: MetricsSummary = {
   total_retries: 0,
 };
 
+const scenarios = [
+  ["normal", "Normal"],
+  ["transient_failure", "Transient failure"],
+  ["permanent_failure", "Permanent failure"],
+  ["malformed_output", "Malformed output"],
+  ["slow_execution", "Slow execution"],
+] as const;
+
+const terminalStatuses = new Set(["completed", "failed", "cancelled", "timed_out"]);
+
+type FormSnapshot = {
+  text: string;
+  key: string;
+  workflow: WorkflowType;
+  scenario: string;
+};
+
+function duration(ms: number | null | undefined): string {
+  if (ms == null) return "–";
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
+}
+
 export default function App() {
   const [workflowType, setWorkflowType] =
     useState<WorkflowType>("summarize_text");
@@ -57,9 +80,28 @@ export default function App() {
   const [metrics, setMetrics] = useState<MetricsSummary>(defaultMetrics);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
+  const [scenario, setScenario] = useState("normal");
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
   const pendingSubmission = useRef<{ fingerprint: string; key: string } | null>(
     null,
   );
+  const submitting = useRef(false);
+  const formValues = useRef<FormSnapshot>({ text: "", key: "", workflow: "summarize_text", scenario: "normal" });
+  const pendingClear = useRef<(FormSnapshot & { jobId: string }) | null>(null);
+
+  function clearCompletedSubmission(job: JobListItem | JobRead) {
+    const submitted = pendingClear.current;
+    if (!submitted || submitting.current || submitted.jobId !== job.id || !terminalStatuses.has(job.status)) return;
+    pendingClear.current = null;
+    const current = formValues.current;
+    if (current.text !== submitted.text || current.key !== submitted.key ||
+        current.workflow !== submitted.workflow || current.scenario !== submitted.scenario) return;
+    formValues.current = { ...current, text: "", key: "" };
+    setText("");
+    setIdempotencyKey("");
+  }
 
   async function loadDashboard() {
     const [nextJobs, nextMetrics] = await Promise.all([
@@ -68,10 +110,19 @@ export default function App() {
     ]);
     setJobs(nextJobs);
     setMetrics(nextMetrics);
+    const awaiting = pendingClear.current;
+    if (awaiting) {
+      const recent = nextJobs.find((job) => job.id === awaiting.jobId);
+      clearCompletedSubmission(recent ?? await fetchJob(awaiting.jobId));
+    }
     if (selectedJobId) {
       setSelectedJob(await fetchJob(selectedJobId));
     }
   }
+
+  useEffect(() => {
+    fetchRuntimeConfig().then((config) => setDemoMode(config.demo_mode)).catch((err) => setError(err.message));
+  }, []);
 
   useEffect(() => {
     loadDashboard().catch((err) => setError(err.message));
@@ -84,19 +135,28 @@ export default function App() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setSubmissionNotice(null);
     setIsSubmitting(true);
+    submitting.current = true;
     try {
-      const fingerprint = JSON.stringify([workflowType, text]);
+      const submitted = { ...formValues.current };
+      const fingerprint = JSON.stringify([submitted.workflow, submitted.text, submitted.scenario]);
       if (pendingSubmission.current?.fingerprint !== fingerprint) {
         pendingSubmission.current = { fingerprint, key: crypto.randomUUID() };
       }
-      await submitJob(workflowType, text, pendingSubmission.current.key);
+      const result = await submitJob(submitted.workflow, submitted.text, submitted.key.trim() || pendingSubmission.current.key, demoMode ? submitted.scenario : undefined);
+      submitting.current = false;
       pendingSubmission.current = null;
-      setText("");
+      pendingClear.current = { ...submitted, jobId: result.job.id };
+      setSubmissionNotice(result.reused ? "Existing execution reused — this request was not queued twice." : `Job queued: ${result.job.id}`);
+      setSelectedJobId(result.job.id);
+      setSelectedJob(result.job);
+      clearCompletedSubmission(result.job);
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to submit job");
     } finally {
+      submitting.current = false;
       setIsSubmitting(false);
     }
   }
@@ -177,7 +237,7 @@ export default function App() {
           tone="indigo"
           icon={<Clock3 />}
           label="Avg latency"
-          value={`${metrics.average_latency_ms} ms`}
+          value={duration(metrics.average_latency_ms)}
         />
         <MetricCard
           tone="cyan"
@@ -197,9 +257,11 @@ export default function App() {
             Workflow
             <select
               value={workflowType}
-              onChange={(event) =>
-                setWorkflowType(event.target.value as WorkflowType)
-              }
+              onChange={(event) => {
+                const value = event.target.value as WorkflowType;
+                formValues.current.workflow = value;
+                setWorkflowType(value);
+              }}
             >
               {workflows.map((workflow) => (
                 <option key={workflow.value} value={workflow.value}>
@@ -212,11 +274,34 @@ export default function App() {
             Input
             <textarea
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                formValues.current.text = event.target.value;
+                setText(event.target.value);
+              }}
               placeholder="Paste an incident note, customer message, or long-form text..."
               required
             />
           </label>
+          {demoMode && (
+            <details className="demo-controls">
+              <summary>Demo controls <small>Development only</small></summary>
+              <label>Execution scenario
+                <select value={scenario} onChange={(event) => {
+                  formValues.current.scenario = event.target.value;
+                  setScenario(event.target.value);
+                }}>
+                  {scenarios.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+              <label>Idempotency key
+                <input value={idempotencyKey} onChange={(event) => {
+                  formValues.current.key = event.target.value;
+                  setIdempotencyKey(event.target.value);
+                }} placeholder="Generated automatically if blank" />
+              </label>
+            </details>
+          )}
+          {submissionNotice && <p className="submission-notice">{submissionNotice}</p>}
           {error && <p className="error-text">{error}</p>}
           <button
             className="primary-button"
@@ -268,12 +353,12 @@ export default function App() {
                     </td>
                     <td>{job.workflow_type}</td>
                     <td>
-                      <StatusBadge status={job.status} />
+                      <StatusBadge status={job.status} retrying={job.retry_count > 0} />
                     </td>
                     <td>
                       {job.retry_count}/{job.max_retries}
                     </td>
-                    <td>{job.latency_ms ? `${job.latency_ms} ms` : "-"}</td>
+                    <td>{duration(job.latency_ms)}</td>
                     <td>{new Date(job.created_at).toLocaleString()}</td>
                   </tr>
                 ))}
@@ -304,7 +389,7 @@ export default function App() {
               <p className="detail-id">{selectedJob.id}</p>
             </div>
             <div className="detail-actions">
-              <StatusBadge status={selectedJob.status} />
+              <StatusBadge status={selectedJob.status} retrying={selectedJob.retry_count > 0} />
               {(selectedJob.status === "queued" ||
                 selectedJob.status === "running") && (
                 <button className="secondary-button" onClick={handleCancel}>
@@ -344,6 +429,13 @@ export default function App() {
                   : "-"
               }
             />
+            <InfoBlock label="Provider" value={selectedJob.provider_name ?? "–"} />
+            <InfoBlock label="Model" value={selectedJob.model_name ?? "–"} />
+            <InfoBlock label="Queue wait" value={duration(selectedJob.queue_latency_ms)} />
+            <InfoBlock label="Execution time" value={selectedJob.started_at && selectedJob.completed_at ? duration(new Date(selectedJob.completed_at).getTime() - new Date(selectedJob.started_at).getTime()) : "–"} />
+            <InfoBlock label="Total time" value={selectedJob.completed_at ? duration(new Date(selectedJob.completed_at).getTime() - new Date(selectedJob.created_at).getTime()) : "–"} />
+            <InfoBlock label="Idempotency key" value={selectedJob.idempotency_key ?? "–"} />
+            <InfoBlock label="Correlation ID" value={selectedJob.correlation_id} />
           </div>
 
           <div className="artifact-grid">
@@ -357,17 +449,18 @@ export default function App() {
           {selectedJob.error_message && (
             <div className="error-box">
               <strong>{selectedJob.error?.code ?? "Error"}</strong>
+              <p>Stage: {selectedJob.error?.code === "StructuredOutputInvalid" ? "Output validation" : selectedJob.error?.code?.startsWith("Provider") ? "Provider" : "Execution"} · Attempt {selectedJob.attempt_count} · Retryable: {selectedJob.error?.retryable ? "Yes" : "No"} · Retries: {selectedJob.retry_count}/{selectedJob.max_retries}</p>
               <pre>{selectedJob.error_message}</pre>
             </div>
           )}
 
           <div className="logs-panel">
-            <h2>Execution logs</h2>
+            <h2>Execution timeline</h2>
             {selectedJob.logs.map((log) => (
               <div className={`log-line log-${log.level}`} key={log.id}>
                 <span>{new Date(log.created_at).toLocaleTimeString()}</span>
-                <strong>{log.level}</strong>
-                <p>{log.message}</p>
+                <strong>{typeof log.context?.attempt === "number" && log.context.attempt > 0 ? `#${log.context.attempt}` : log.level}</strong>
+                <p>{log.message}{typeof log.context?.retry_delay_seconds === "number" ? ` in ${log.context.retry_delay_seconds}s` : ""}{typeof log.context?.provider_latency_ms === "number" ? ` · ${duration(log.context.provider_latency_ms)}` : ""}{typeof (log.context?.error as { code?: string } | undefined)?.code === "string" ? ` · ${(log.context?.error as { code: string }).code}` : ""}{typeof (log.context?.error as { message?: string } | undefined)?.message === "string" ? `: ${(log.context?.error as { message: string }).message}` : ""}</p>
               </div>
             ))}
           </div>

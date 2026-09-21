@@ -27,12 +27,12 @@ ALLOWED = {
 class JobService:
     def __init__(self, db: Session):
         self.db = db
+        self.reused = False
 
     def create_job(self, payload: JobCreate) -> Job:
         canonical = payload.model_dump(exclude={"idempotency_key", "correlation_id"}, mode="json")
-        fingerprint = hashlib.sha256(
-            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        canonical["demo_scenario"] = self._scenario(canonical["demo_scenario"])
+        fingerprint = self._fingerprint(canonical)
         if payload.idempotency_key:
             existing = self.db.scalar(
                 select(Job).where(Job.idempotency_key == payload.idempotency_key)
@@ -44,6 +44,7 @@ class JobService:
             input_payload=payload.input_payload,
             max_retries=payload.max_retries,
             timeout_seconds=payload.timeout_seconds,
+            demo_scenario=payload.demo_scenario.value if payload.demo_scenario else None,
             idempotency_key=payload.idempotency_key,
             correlation_id=payload.correlation_id or str(uuid4()),
             request_hash=fingerprint,
@@ -67,11 +68,31 @@ class JobService:
         self.db.refresh(job)
         return job
 
-    @staticmethod
-    def _same_request(job: Job, fingerprint: str) -> Job:
-        if job.request_hash != fingerprint:
+    def _same_request(self, job: Job, fingerprint: str) -> Job:
+        existing = {
+            "workflow_type": job.workflow_type,
+            "input_payload": job.input_payload,
+            "max_retries": job.max_retries,
+            "timeout_seconds": job.timeout_seconds,
+            "demo_scenario": self._scenario(job.demo_scenario),
+        }
+        # Recompute for older rows hashed before normal/omitted scenario normalization.
+        if job.request_hash != fingerprint and self._fingerprint(existing) != fingerprint:
             raise HTTPException(409, "Idempotency key already used for a different request")
+        self.reused = True
+        self.add_log(job.id, "info", "Existing execution reused", {"attempt": job.attempt_count})
+        self.db.commit()
         return job
+
+    @staticmethod
+    def _scenario(value: str | None) -> str | None:
+        return None if value in (None, "normal") else value
+
+    @staticmethod
+    def _fingerprint(canonical: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     def list_jobs(self) -> list[Job]:
         return list(self.db.scalars(select(Job).order_by(desc(Job.created_at)).limit(100)))
@@ -89,6 +110,26 @@ class JobService:
 
     def add_log(self, job_id: str, level: str, message: str, context: dict | None = None) -> None:
         self.db.add(JobLog(job_id=job_id, level=level, message=message, context=context))
+
+    def event(self, job: Job, message: str, context: dict | None = None) -> None:
+        """Persist an attempt event only while the claimed attempt is still current."""
+        active = self.db.scalar(
+            select(Job.id).where(
+                Job.id == job.id,
+                Job.status == JobStatus.running,
+                Job.attempt_count == job.attempt_count,
+            )
+        )
+        if active:
+            self.add_log(
+                job.id,
+                "info",
+                message,
+                {"status": "running", "attempt": job.attempt_count, **(context or {})},
+            )
+            self.db.commit()
+        else:
+            self.db.rollback()
 
     @staticmethod
     def context(job: Job) -> dict:
@@ -113,6 +154,7 @@ class JobService:
         *,
         values: dict | None = None,
         conditions: tuple = (),
+        event_context: dict | None = None,
     ) -> bool:
         """Compare-and-swap status AND attempt: stale workers cannot overwrite a newer state."""
         if status not in ALLOWED.get(job.status, set()):
@@ -140,6 +182,9 @@ class JobService:
             return False
         current = self.db.get(Job, job.id, populate_existing=True)
         context = self.context(current)
+        context.update(event_context or {})
+        if status == JobStatus.queued and event_context and "error" in event_context:
+            self.add_log(job.id, "warning", "Retryable transient failure", context)
         self.add_log(job.id, "info", message, context)
         self.db.commit()
         logger.info(message, extra=context)
@@ -163,13 +208,19 @@ class JobService:
                 "attempt_count": expected_attempt + 1,
                 "started_at": now,
                 "deadline_at": now + timedelta(seconds=job.timeout_seconds),
-                "queue_latency_ms": max(0, int((now - job.next_attempt_at).total_seconds() * 1000)),
+                **(
+                    {"queue_latency_ms": max(0, int((now - job.created_at).total_seconds() * 1000))}
+                    if expected_attempt == 0
+                    else {}
+                ),
                 "error": None,
                 "error_message": None,
                 "latency_ms": None,
             },
             conditions=(Job.next_attempt_at <= now,),
         )
+        if claimed:
+            self.event(job, "Attempt started")
         return job if claimed else None
 
     def finish(
@@ -199,12 +250,18 @@ class JobService:
                 deadline_at=None,
             )
             return self.transition(
-                job, JobStatus.queued, "Transient failure; retry scheduled", values=values
+                job,
+                JobStatus.queued,
+                "Retry scheduled",
+                values=values,
+                event_context={"retry_delay_seconds": delay, "error": error.as_dict()},
             )
         status = (
             JobStatus.timed_out if error.code == ErrorCode.execution_timeout else JobStatus.failed
         )
-        return self.transition(job, status, "Workflow failed", values=values)
+        return self.transition(
+            job, status, "Workflow failed", values=values, event_context={"error": error.as_dict()}
+        )
 
     def is_active(self, job: Job) -> bool:
         status = self.db.scalar(

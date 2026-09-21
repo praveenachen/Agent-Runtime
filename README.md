@@ -44,7 +44,7 @@ A job records its ID, handler (`workflow_type`), input/output, timestamps, attem
 | Delivery | Due jobs are redispatched after a lease expires. Queue delivery can repeat; only one worker can claim a given attempt. Progress requires a healthy database, dispatcher, Redis, and worker. |
 | Retries | Connection/5xx failures, rate limits, and provider timeouts retry up to `max_retries` (default 2, maximum 5). Delay is `min(cap, base × 2^retry_count)` before incrementing the count; defaults are 60s and 5s. SDK retries are disabled. |
 | Permanent failures | Invalid input is rejected before enqueue. Invalid output and unexpected internal errors fail without automatic retry. Manual retry never resets the budget and rejects ineligible jobs. |
-| Idempotency | A caller-owned key plus a hash of the validated request resolves duplicates to one job. Reusing a key with different input, retry budget, or execution timeout returns 409. Keys are database-wide and retained with job history. No key means a new job. |
+| Idempotency | A caller-owned key plus a hash of the validated request resolves duplicates to one job. Workflow, validated input, retry budget, execution timeout, and non-normal demo scenario define the logical request. Omitted and explicit normal scenarios are equivalent; generated IDs, correlation IDs, and timestamps are excluded. A material change with the same key returns 409. Keys are database-wide and retained with job history. No key means a new job. |
 | Timeouts | Provider/network timeout defaults to 60s. Execution timeout defaults to 300s per attempt and is enforced by RQ. The dispatcher expires abandoned running records after their deadline. HTTP disconnects do not cancel jobs; queue wait has no expiry. |
 | Cancellation | Cancels queued/running state, prevents subsequent attempts and late result publication, and leaves terminal jobs unchanged. It cannot undo or reliably interrupt an in-flight provider request. |
 | External effects | A provider timeout can have an unknown external outcome. Retries may repeat calls; downstream effects need their own idempotency support. There is no exactly-once external-effect guarantee. |
@@ -108,6 +108,20 @@ Node 22.12+ is required for the frontend. Its build runs TypeScript checking fol
 
 [CI](.github/workflows/ci.yml) runs these gates plus Compose validation and backend/frontend image builds. Building images is not a live Redis/RQ integration test.
 
+## Demonstrating Runtime Reliability
+
+Set `DEMO_MODE=true` in `.env` and run `docker compose up --build`. Demo controls appear only when `ENVIRONMENT=development` too. The flag defaults off, and the API rejects scenario requests when disabled. Leave `OPENAI_API_KEY` blank for the deterministic mock provider; a configured key uses the real OpenAI adapter for normal and transient second attempts. Keep demo mode off on public deployments.
+
+- **Normal:** submit a workflow and inspect the persisted provider and validation events.
+- **Transient retry:** choose Transient failure. Attempt 1 gets a deterministic retryable error; the existing dispatcher runs attempt 2 after backoff.
+- **Validation failure:** choose Malformed output. The adapter returns an invalid object and Pydantic rejects it without retry.
+- **Deduplication:** enter `demo-incident-001`, submit, then repeat with the same workflow and input. The API returns the original job and records reuse. Changing the request with the same key returns 409. This is application-level deduplication, not exactly-once external execution.
+- **Cancellation:** choose Slow execution and cancel while queued or running. Queued jobs never start. Running cancellation prevents late result publication but cannot reliably interrupt or undo a provider call. The slow scenario occupies one RQ worker for about 10 seconds.
+
+Queue wait is first worker start minus creation. Execution time is latest completion minus latest worker start; total time is completion minus creation. For retries, execution time excludes previous attempts and backoff, while total time includes both. Provider timing measures the adapter call, including demo delay. The timeline displays committed database events. The runtime has no authentication or tenant isolation, so keys are database-wide; remote access requires an authenticated gateway.
+
+The dashboard clears the submitted text and manual key after that job reaches a terminal state, provided the form still contains the submitted values. It preserves the selected workflow and scenario and leaves newly edited input intact. A retry demonstration does not require a manual key.
+
 ## Engineering decisions
 
 Four [decision records](docs/decisions.md) explain the tradeoffs:
@@ -123,5 +137,5 @@ Four [decision records](docs/decisions.md) explain the tradeoffs:
 - No built-in authentication, tenant isolation, or quotas. Compose binds the API/dashboard to localhost and keeps Redis internal. Remote use requires an authenticated TLS gateway and access controls.
 - Inputs and outputs are retained in SQLite and returned by the API. Safe logging does not make stored payloads non-sensitive; there is no retention or encryption-at-rest policy built into the app.
 - Recovery depends on the dispatcher being alive. Execution timeout does not roll back external effects; cancellation does not terminate every in-flight provider call.
-- History lists the latest 100 jobs. Dashboard submission keys survive failed retries in the current page session, not reloads. `/health` is liveness, not worker/Redis readiness.
+- History lists the latest 100 jobs. A generated dashboard key survives a failed submission attempt in the current page session, not reloads. `/health` is liveness, not worker/Redis readiness.
 - Built-in handlers are examples, not a workflow DSL or general tool-execution platform. Relay interoperability and live-provider behavior need separate integration validation.

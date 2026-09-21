@@ -35,6 +35,7 @@ def create_job(
     job = service.get_job(identity)
     response.headers["X-Correlation-ID"] = job.correlation_id
     response.headers["Location"] = f"/jobs/{identity}"
+    response.headers["X-Idempotency-Reused"] = str(service.reused).lower()
     return JobRead.model_validate(job)
 
 

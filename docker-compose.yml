@@ -23,6 +23,8 @@ services:
       RETRY_MAX_SECONDS: ${RETRY_MAX_SECONDS:-60}
       DISPATCH_INTERVAL_SECONDS: ${DISPATCH_INTERVAL_SECONDS:-2}
       REDISPATCH_SECONDS: ${REDISPATCH_SECONDS:-30}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      ENVIRONMENT: development
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000
     volumes:
       - ./data:/data

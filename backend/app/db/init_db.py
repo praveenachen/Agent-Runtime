@@ -14,6 +14,9 @@ COLUMNS = {
     "next_attempt_at": "DATETIME",
     "last_dispatched_at": "DATETIME",
     "queue_latency_ms": "INTEGER",
+    "demo_scenario": "VARCHAR(32)",
+    "provider_name": "VARCHAR(64)",
+    "model_name": "VARCHAR(128)",
 }
 
 

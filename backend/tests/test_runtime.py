@@ -89,7 +89,15 @@ def test_success_and_duplicate_delivery(runtime):
     assert job.attempt_count == 1
     assert job.output_payload["summary"] == "Hello world."
     assert job.started_at and job.completed_at and job.queue_latency_ms is not None
-    assert [log.context["status"] for log in job.logs] == ["queued", "running", "completed"]
+    assert [log.message for log in job.logs] == [
+        "Job queued",
+        "Worker picked up job",
+        "Attempt started",
+        "Provider request started",
+        "Provider response received",
+        "Output validated",
+        "Workflow completed",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -402,3 +410,207 @@ def test_api_accepts_durable_work_during_redis_outage(client, runtime, monkeypat
         client.post("/jobs", json=body, headers={"Idempotency-Key": "outage"}).json()["id"]
         == response.json()["id"]
     )
+
+
+@pytest.mark.parametrize(
+    "scenario,final_status,code",
+    [
+        ("normal", JobStatus.completed, None),
+        ("permanent_failure", JobStatus.failed, "ValidationError"),
+        ("malformed_output", JobStatus.failed, "StructuredOutputInvalid"),
+    ],
+)
+def test_demo_scenarios(runtime, monkeypatch, scenario, final_status, code):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    identity = submit(runtime, demo_scenario=scenario)
+    worker.execute_job(identity)
+    job = read(runtime, identity)
+    assert job.status == final_status
+    assert (job.error or {}).get("code") == code
+    assert job.provider_name == (
+        "DemoMalformedOutput"
+        if scenario == "malformed_output"
+        else None
+        if scenario == "permanent_failure"
+        else "MockAIProvider"
+    )
+    if scenario == "malformed_output":
+        assert "Provider response received" in [log.message for log in job.logs]
+    monkeypatch.setattr(get_settings(), "demo_mode", False)
+
+
+def test_demo_transient_retry(runtime, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    identity = submit(runtime, demo_scenario="transient_failure")
+    worker.execute_job(identity, 0)
+    first = read(runtime, identity)
+    assert first.status == JobStatus.queued and first.retry_count == 1
+    assert first.logs[-1].context["retry_delay_seconds"] > 0
+    due(runtime, identity)
+    worker.execute_job(identity, 1)
+    job = read(runtime, identity)
+    assert job.status == JobStatus.completed and job.attempt_count == 2
+    assert job.retry_count == 1
+    assert [log.message for log in job.logs] == [
+        "Job queued",
+        "Worker picked up job",
+        "Attempt started",
+        "Retryable transient failure",
+        "Retry scheduled",
+        "Worker picked up job",
+        "Attempt started",
+        "Provider request started",
+        "Provider response received",
+        "Output validated",
+        "Workflow completed",
+    ]
+    assert job.logs[3].context["attempt"] == 1
+    assert job.logs[3].context["error"]["code"] == "ProviderRateLimited"
+    assert job.logs[4].context["retry_delay_seconds"] > 0
+    assert job.logs[6].context["attempt"] == 2
+    monkeypatch.setattr(get_settings(), "demo_mode", False)
+
+
+def test_demo_slow_running_observable(runtime, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    identity = submit(runtime, demo_scenario="slow_execution")
+
+    def observe(_seconds):
+        assert read(runtime, identity).status == JobStatus.running
+
+    monkeypatch.setattr(worker.time, "sleep", observe)
+    worker.execute_job(identity)
+    assert read(runtime, identity).status == JobStatus.completed
+    monkeypatch.setattr(get_settings(), "demo_mode", False)
+
+
+def test_demo_guard_and_reuse_event(client, runtime, monkeypatch):
+    from app.core.config import get_settings
+
+    body = {
+        "workflow_type": "summarize_text",
+        "input_payload": {"text": "hello"},
+        "demo_scenario": "transient_failure",
+    }
+    assert client.post("/jobs", json=body).status_code == 422
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    first = client.post("/jobs", json=body, headers={"Idempotency-Key": "demo-key"})
+    second = client.post("/jobs", json=body, headers={"Idempotency-Key": "demo-key"})
+    assert first.json()["id"] == second.json()["id"]
+    assert second.headers["x-idempotency-reused"] == "true"
+    assert "Existing execution reused" in [
+        log.message for log in read(runtime, first.json()["id"]).logs
+    ]
+    monkeypatch.setattr(get_settings(), "demo_mode", False)
+
+
+def test_latency_breakdown_uses_first_queue_wait_and_latest_execution(runtime):
+    identity = submit(runtime)
+    worker.execute_job(identity)
+    job = read(runtime, identity)
+    queue_ms = (job.started_at - job.created_at).total_seconds() * 1000
+    execution_ms = (job.completed_at - job.started_at).total_seconds() * 1000
+    total_ms = (job.completed_at - job.created_at).total_seconds() * 1000
+    assert abs(job.queue_latency_ms - queue_ms) < 2
+    assert abs(job.latency_ms - execution_ms) < 2
+    assert abs(total_ms - queue_ms - execution_ms) < 0.01
+
+
+def test_demo_disabled_in_production_even_if_flag_set(client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    monkeypatch.setattr(get_settings(), "environment", "production")
+    body = {
+        "workflow_type": "summarize_text",
+        "input_payload": {"text": "hello"},
+        "demo_scenario": "normal",
+    }
+    assert client.get("/runtime-config").json() == {"demo_mode": False}
+    assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_idempotency_normalizes_defaults_and_scenario(client, runtime, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    body = {"workflow_type": "summarize_text", "input_payload": {"text": "same"}}
+    headers = {"Idempotency-Key": "normalized-key"}
+    first = client.post("/jobs", json=body, headers=headers)
+    equivalent = {
+        **body,
+        "max_retries": 2,
+        "timeout_seconds": 300,
+        "demo_scenario": "normal",
+        "correlation_id": "another-trace",
+    }
+    second = client.post("/jobs", json=equivalent, headers=headers)
+    assert first.status_code == second.status_code == 202
+    assert first.json()["id"] == second.json()["id"]
+    assert second.headers["x-idempotency-reused"] == "true"
+    with runtime() as db:
+        assert db.scalar(select(func.count()).select_from(Job)) == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"input_payload": {"text": "different"}},
+        {"workflow_type": "extract_structured_data"},
+        {"demo_scenario": "transient_failure"},
+        {"max_retries": 3},
+        {"timeout_seconds": 301},
+    ],
+)
+def test_idempotency_rejects_changed_logical_request(client, runtime, monkeypatch, change):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    body = {"workflow_type": "summarize_text", "input_payload": {"text": "same"}}
+    headers = {"Idempotency-Key": "conflict-key"}
+    first = client.post("/jobs", json=body, headers=headers)
+    assert first.status_code == 202
+    assert client.post("/jobs", json={**body, **change}, headers=headers).status_code == 409
+    with runtime() as db:
+        assert db.scalar(select(func.count()).select_from(Job)) == 1
+
+
+def test_duplicate_request_never_enqueues_second_execution(client, runtime, monkeypatch):
+    dispatched = []
+    monkeypatch.setattr(
+        QueueService, "enqueue_job", lambda self, *args: dispatched.append(args) or "rq-id"
+    )
+    body = {"workflow_type": "summarize_text", "input_payload": {"text": "same"}}
+    headers = {"Idempotency-Key": "one-delivery"}
+    first = client.post("/jobs", json=body, headers=headers)
+    second = client.post("/jobs", json=body, headers=headers)
+    assert first.json()["id"] == second.json()["id"]
+    assert len(dispatched) == 1
+    worker.execute_job(first.json()["id"])
+    assert read(runtime, first.json()["id"]).attempt_count == 1
+
+
+def test_transient_demo_without_manual_key(client, runtime, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "demo_mode", True)
+    body = {
+        "workflow_type": "summarize_text",
+        "input_payload": {"text": "retry"},
+        "demo_scenario": "transient_failure",
+    }
+    response = client.post("/jobs", json=body)
+    assert response.status_code == 202
+    identity = response.json()["id"]
+    assert response.json()["idempotency_key"] is None
+    worker.execute_job(identity, 0)
+    assert read(runtime, identity).status == JobStatus.queued
+    due(runtime, identity)
+    worker.execute_job(identity, 1)
+    assert read(runtime, identity).status == JobStatus.completed

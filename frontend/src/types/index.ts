@@ -30,6 +30,13 @@ export interface JobRead extends JobListItem {
   correlation_id: string;
   attempt_count: number;
   error: { code: string; message: string; retryable: boolean } | null;
+  retry_count: number;
+  max_retries: number;
+  idempotency_key: string | null;
+  queue_latency_ms: number | null;
+  demo_scenario: string | null;
+  provider_name: string | null;
+  model_name: string | null;
 }
 
 export interface MetricsSummary {

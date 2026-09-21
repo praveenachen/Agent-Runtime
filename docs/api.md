@@ -32,6 +32,8 @@ curl -sS -X POST http://localhost:8000/jobs/JOB_ID/cancel
 
 Keys/correlation IDs may also be sent as `idempotency_key` and `correlation_id` body fields. They accept 1–128 printable ASCII characters without spaces. Conflicting header/body identifiers return 422. Submit/status responses include `X-Correlation-ID`; submission also includes `Location`. Missing correlation IDs are generated once. Correlation IDs are excluded from the idempotency fingerprint; a duplicate submission retains the original correlation ID.
 
+The fingerprint covers workflow type, validated input, retry budget, execution timeout, and non-normal demo scenario. Omitted and explicit `normal` scenarios are equivalent. Server defaults are normalized before hashing; a changed material field with the same key returns 409. Submission includes `X-Idempotency-Reused: true` when it returns an existing job.
+
 ## Registered handlers
 
 These small handlers demonstrate the runtime boundary. They do not implement Relay planning or arbitrary action execution.

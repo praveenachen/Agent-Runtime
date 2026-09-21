@@ -1,11 +1,21 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.config import get_settings
 from app.core.errors import ErrorCode
 from app.models.job import JobStatus
 from app.schemas.workflows import INPUT_MODELS, WorkflowType
+
+
+class DemoScenario(StrEnum):
+    normal = "normal"
+    transient_failure = "transient_failure"
+    permanent_failure = "permanent_failure"
+    malformed_output = "malformed_output"
+    slow_execution = "slow_execution"
 
 
 class JobCreate(BaseModel):
@@ -19,9 +29,12 @@ class JobCreate(BaseModel):
     correlation_id: str | None = Field(
         default=None, min_length=1, max_length=128, pattern=r"^[!-~]+$"
     )
+    demo_scenario: DemoScenario | None = None
 
     @model_validator(mode="after")
     def validate_input(self):
+        if self.demo_scenario is not None and not get_settings().demo_enabled:
+            raise ValueError("Demo scenarios require DEMO_MODE=true in development")
         self.input_payload = (
             INPUT_MODELS[self.workflow_type].model_validate(self.input_payload).model_dump()
         )
@@ -64,6 +77,9 @@ class JobRead(BaseModel):
     attempt_count: int
     timeout_seconds: int
     queue_latency_ms: int | None = None
+    demo_scenario: str | None = None
+    provider_name: str | None = None
+    model_name: str | None = None
     next_attempt_at: datetime
 
     model_config = {"from_attributes": True}

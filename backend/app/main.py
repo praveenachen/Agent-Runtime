@@ -36,3 +36,8 @@ app.include_router(metrics_router)
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
+
+
+@app.get("/runtime-config")
+def runtime_config() -> dict[str, bool]:
+    return {"demo_mode": get_settings().demo_enabled}

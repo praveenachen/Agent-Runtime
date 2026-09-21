@@ -9,6 +9,7 @@ const labels: Record<JobStatus, string> = {
   timed_out: "Timed out",
 };
 
-export function StatusBadge({ status }: { status: JobStatus }) {
-  return <span className={`status status-${status}`}>{labels[status]}</span>;
+export function StatusBadge({ status, retrying = false }: { status: JobStatus; retrying?: boolean }) {
+  const isRetrying = status === "queued" && retrying;
+  return <span className={`status status-${isRetrying ? "retrying" : status}`}>{isRetrying ? "Retrying" : labels[status]}</span>;
 }

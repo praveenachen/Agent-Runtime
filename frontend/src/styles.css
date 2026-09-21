@@ -48,6 +48,7 @@ body {
 }
 button,
 select,
+input,
 textarea {
   font: inherit;
 }
@@ -273,6 +274,7 @@ label {
   font-weight: 550;
 }
 select,
+input,
 textarea {
   width: 100%;
   border: 1px solid var(--border);
@@ -288,6 +290,14 @@ select option {
   background: var(--surface-inset);
   color: var(--text);
 }
+input { min-height: 44px; padding: 0 12px; }
+.demo-controls { border-top: 1px solid var(--border); padding-top: 14px; color: var(--text-secondary); font-size: 0.8rem; }
+.demo-controls summary { cursor: pointer; }
+.demo-controls small { color: var(--muted); margin-left: 6px; }
+.demo-controls label { margin-top: 14px; }
+.submission-notice { color: var(--green); font-size: 0.78rem; overflow-wrap: anywhere; margin: 0; }
+.status-cancelled { --status-color: var(--muted); }
+.status-retrying { --status-color: #e4bb73; }
 textarea {
   min-height: 200px;
   resize: vertical;

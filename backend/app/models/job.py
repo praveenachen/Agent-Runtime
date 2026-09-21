@@ -43,9 +43,12 @@ class Job(Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     queue_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    demo_scenario: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     logs: Mapped[list["JobLog"]] = relationship(
-        back_populates="job", cascade="all, delete-orphan", order_by="JobLog.created_at"
+        back_populates="job", cascade="all, delete-orphan", order_by="JobLog.id"
     )
 
 

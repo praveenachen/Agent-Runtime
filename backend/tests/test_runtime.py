@@ -490,7 +490,7 @@ def test_demo_slow_running_observable(runtime, monkeypatch):
     monkeypatch.setattr(get_settings(), "demo_mode", False)
 
 
-def test_demo_guard_and_reuse_event(client, runtime, monkeypatch):
+def test_demo_guard_and_reuse_does_not_change_timeline(client, runtime, monkeypatch):
     from app.core.config import get_settings
 
     body = {
@@ -501,12 +501,13 @@ def test_demo_guard_and_reuse_event(client, runtime, monkeypatch):
     assert client.post("/jobs", json=body).status_code == 422
     monkeypatch.setattr(get_settings(), "demo_mode", True)
     first = client.post("/jobs", json=body, headers={"Idempotency-Key": "demo-key"})
+    original_logs = [log.message for log in read(runtime, first.json()["id"]).logs]
     second = client.post("/jobs", json=body, headers={"Idempotency-Key": "demo-key"})
+    third = client.post("/jobs", json=body, headers={"Idempotency-Key": "demo-key"})
     assert first.json()["id"] == second.json()["id"]
     assert second.headers["x-idempotency-reused"] == "true"
-    assert "Existing execution reused" in [
-        log.message for log in read(runtime, first.json()["id"]).logs
-    ]
+    assert third.headers["x-idempotency-reused"] == "true"
+    assert [log.message for log in read(runtime, first.json()["id"]).logs] == original_logs
     monkeypatch.setattr(get_settings(), "demo_mode", False)
 
 

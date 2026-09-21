@@ -80,8 +80,6 @@ class JobService:
         if job.request_hash != fingerprint and self._fingerprint(existing) != fingerprint:
             raise HTTPException(409, "Idempotency key already used for a different request")
         self.reused = True
-        self.add_log(job.id, "info", "Existing execution reused", {"attempt": job.attempt_count})
-        self.db.commit()
         return job
 
     @staticmethod

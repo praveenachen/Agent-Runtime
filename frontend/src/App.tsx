@@ -23,6 +23,13 @@ import {
   submitJob,
 } from "./api/client";
 import { StatusBadge } from "./components/StatusBadge";
+import {
+  shouldClearForm,
+  submissionNotice as getSubmissionNotice,
+  terminalStatuses,
+  timelineText,
+} from "./uiLogic";
+import type { FormSnapshot } from "./uiLogic";
 import type {
   JobListItem,
   JobRead,
@@ -56,15 +63,6 @@ const scenarios = [
   ["slow_execution", "Slow execution"],
 ] as const;
 
-const terminalStatuses = new Set(["completed", "failed", "cancelled", "timed_out"]);
-
-type FormSnapshot = {
-  text: string;
-  key: string;
-  workflow: WorkflowType;
-  scenario: string;
-};
-
 function duration(ms: number | null | undefined): string {
   if (ms == null) return "–";
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
@@ -93,11 +91,11 @@ export default function App() {
 
   function clearCompletedSubmission(job: JobListItem | JobRead) {
     const submitted = pendingClear.current;
-    if (!submitted || submitting.current || submitted.jobId !== job.id || !terminalStatuses.has(job.status)) return;
+    if (!submitted || submitting.current || submitted.jobId !== job.id) return;
+    if (!terminalStatuses.has(job.status)) return;
     pendingClear.current = null;
     const current = formValues.current;
-    if (current.text !== submitted.text || current.key !== submitted.key ||
-        current.workflow !== submitted.workflow || current.scenario !== submitted.scenario) return;
+    if (!shouldClearForm(submitted, current, job.status)) return;
     formValues.current = { ...current, text: "", key: "" };
     setText("");
     setIdempotencyKey("");
@@ -147,8 +145,8 @@ export default function App() {
       const result = await submitJob(submitted.workflow, submitted.text, submitted.key.trim() || pendingSubmission.current.key, demoMode ? submitted.scenario : undefined);
       submitting.current = false;
       pendingSubmission.current = null;
-      pendingClear.current = { ...submitted, jobId: result.job.id };
-      setSubmissionNotice(result.reused ? "Existing execution reused — this request was not queued twice." : `Job queued: ${result.job.id}`);
+      pendingClear.current = result.reused ? null : { ...submitted, jobId: result.job.id };
+      setSubmissionNotice(getSubmissionNotice(result.reused, result.job.id));
       setSelectedJobId(result.job.id);
       setSelectedJob(result.job);
       clearCompletedSubmission(result.job);
@@ -460,7 +458,7 @@ export default function App() {
               <div className={`log-line log-${log.level}`} key={log.id}>
                 <span>{new Date(log.created_at).toLocaleTimeString()}</span>
                 <strong>{typeof log.context?.attempt === "number" && log.context.attempt > 0 ? `#${log.context.attempt}` : log.level}</strong>
-                <p>{log.message}{typeof log.context?.retry_delay_seconds === "number" ? ` in ${log.context.retry_delay_seconds}s` : ""}{typeof log.context?.provider_latency_ms === "number" ? ` · ${duration(log.context.provider_latency_ms)}` : ""}{typeof (log.context?.error as { code?: string } | undefined)?.code === "string" ? ` · ${(log.context?.error as { code: string }).code}` : ""}{typeof (log.context?.error as { message?: string } | undefined)?.message === "string" ? `: ${(log.context?.error as { message: string }).message}` : ""}</p>
+                <p>{timelineText(log)}</p>
               </div>
             ))}
           </div>
